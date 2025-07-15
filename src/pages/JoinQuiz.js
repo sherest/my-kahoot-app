@@ -1,10 +1,10 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { db } from "../firebase";
-import { doc, getDoc } from "firebase/firestore";
+import { collection, query, where, getDocs, doc, getDoc, addDoc, serverTimestamp } from "firebase/firestore";
 
 const JoinQuiz = () => {
-  const [quizId, setQuizId] = useState("");
+  const [gamePin, setGamePin] = useState("");
   const [nickname, setNickname] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -15,22 +15,45 @@ const JoinQuiz = () => {
     setError("");
     setLoading(true);
     try {
-      const quizRef = doc(db, "quizzes", quizId.trim());
-      const quizSnap = await getDoc(quizRef);
-      if (quizSnap.exists()) {
-        const quizData = quizSnap.data();
-        navigate("/play", {
-          state: {
-            quiz: quizData,
-            quizId: quizId.trim(),
-            nickname
-          }
-        });
-      } else {
-        setError("Quiz not found. Please check the Quiz ID.");
+      // 1. Find session by gamePin
+      const sessionsRef = collection(db, "sessions");
+      const q = query(sessionsRef, where("gamePin", "==", gamePin.trim()));
+      const sessionSnap = await getDocs(q);
+      if (sessionSnap.empty) {
+        setError("Invalid game PIN");
+        setLoading(false);
+        return;
       }
+      const sessionDoc = sessionSnap.docs[0];
+      const sessionId = sessionDoc.id;
+      const { quizId, currentQuestionIndex } = sessionDoc.data();
+      // 2. Fetch quiz
+      const quizRef = doc(db, "quizzes", quizId);
+      const quizSnap = await getDoc(quizRef);
+      if (!quizSnap.exists()) {
+        setError("Quiz not found for this session");
+        setLoading(false);
+        return;
+      }
+      const quiz = quizSnap.data();
+      // 3. Add player to session's players subcollection
+      const playersRef = collection(db, "sessions", sessionId, "players");
+      await addDoc(playersRef, {
+        nickname,
+        joinedAt: serverTimestamp(),
+        score: 0
+      });
+      // 4. Navigate to /play
+      navigate("/play", {
+        state: {
+          quiz,
+          sessionId,
+          nickname,
+          currentQuestionIndex: currentQuestionIndex || 0
+        }
+      });
     } catch (err) {
-      setError("Error fetching quiz: " + err.message);
+      setError("Error joining game: " + err.message);
     } finally {
       setLoading(false);
     }
@@ -38,17 +61,19 @@ const JoinQuiz = () => {
 
   return (
     <div style={{ textAlign: "center", marginTop: "3rem" }}>
-      <h2>Join a Quiz</h2>
+      <h2>Join a Game</h2>
       <form onSubmit={handleSubmit} style={{ display: "inline-block", marginTop: "2rem", minWidth: 300 }}>
         <div>
           <input
             type="text"
-            placeholder="Quiz ID"
-            value={quizId}
-            onChange={e => setQuizId(e.target.value)}
+            placeholder="Game PIN"
+            value={gamePin}
+            onChange={e => setGamePin(e.target.value)}
             required
             style={{ padding: "0.5rem", margin: "0.5rem", width: "90%" }}
             disabled={loading}
+            maxLength={6}
+            pattern="[0-9]{6}"
           />
         </div>
         <div>
